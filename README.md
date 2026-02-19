@@ -103,6 +103,61 @@ docker logs -f purgarr
 
 Check the logs to verify correct oldest-first ordering. When satisfied, set `DRY_RUN=false` and restart.
 
+## Production Example
+
+Purgarr alongside a full *arr stack, cleaning up disk space every 6 hours:
+
+```yaml
+services:
+  # radarr:  ...    (movie management, port 7878)
+  # sonarr:  ...    (TV management, port 8989)
+  # jellyfin: ...   (media server, port 8096)
+  # plex:    ...    (media server, host network, port 32400)
+  # qbittorrent: .. (torrent client, port 8080)
+  # seerr:   ...    (request UI, port 5055)
+
+  purgarr:
+    image: ghcr.io/mderouet/purgarr:latest
+    container_name: purgarr
+    restart: unless-stopped
+    mem_limit: 256m
+    env_file:
+      - .env
+    volumes:
+      - /mnt/media:/media   # must be the same filesystem as the *arr stack
+```
+
+```env
+# Service connections (use Docker DNS names)
+RADARR_URL=http://radarr:7878
+RADARR_API_KEY=your-radarr-api-key
+SONARR_URL=http://sonarr:8989
+SONARR_API_KEY=your-sonarr-api-key
+JELLYFIN_URL=http://jellyfin:8096
+JELLYFIN_API_KEY=your-jellyfin-api-key
+QBITTORRENT_URL=http://qbittorrent:8080
+QBITTORRENT_USERNAME=admin
+QBITTORRENT_PASSWORD=your-password
+
+# Plex uses host network — use your server IP, not Docker DNS
+PLEX_URL=http://your-server-ip:32400
+PLEX_TOKEN=your-plex-token
+
+# Seerr — triggers availability sync so removed media disappears from the request UI
+SEERR_URL=http://seerr:5055
+SEERR_API_KEY=your-seerr-api-key
+
+# Cleanup config
+MEDIA_PATH=/media
+SPACE_MODE=true
+FREE_SPACE_THRESHOLD_GB=10
+AGE_MODE=false
+MAX_AGE_DAYS=180
+DRY_RUN=false
+CRON_SCHEDULE=0 */6 * * *
+VERBOSE=false
+```
+
 ## How It Works
 
 On each run, Purgarr:
@@ -160,6 +215,8 @@ On each run, Purgarr:
 | `QBITTORRENT_URL` | *(disabled)* | qBittorrent Web API URL |
 | `QBITTORRENT_USERNAME` | *(empty)* | qBittorrent username |
 | `QBITTORRENT_PASSWORD` | *(empty)* | qBittorrent password |
+| `SEERR_URL` | *(disabled)* | Seerr API URL (e.g. `http://seerr:5055`) |
+| `SEERR_API_KEY` | *(disabled)* | Seerr API key (Settings > General) |
 
 ### Modes
 
@@ -187,9 +244,9 @@ On each run, Purgarr:
 | **Jellyfin** | Play data enrichment + entry cleanup | Yes |
 | **Plex** | Library scan + trash cleanup | No |
 | **qBittorrent** | Torrent + download file cleanup | No |
-| **Seerr/Jellyseerr** | Auto-syncs availability (no API calls needed) | No |
+| **Seerr** | Availability sync after deletions | No |
 
-Plex and qBittorrent are optional — if not configured, Purgarr skips their cleanup steps. Seerr/Jellyseerr require no configuration; they detect changes from Radarr/Sonarr automatically.
+Plex, qBittorrent, and Seerr are optional — if not configured, Purgarr skips their cleanup steps.
 
 ## Safety
 
