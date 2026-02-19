@@ -56,6 +56,9 @@ QBITTORRENT_URL = get_env("QBITTORRENT_URL", "")
 QBITTORRENT_USERNAME = get_env("QBITTORRENT_USERNAME", "")
 QBITTORRENT_PASSWORD = get_env("QBITTORRENT_PASSWORD", "")
 
+SEERR_URL = get_env("SEERR_URL", "")
+SEERR_API_KEY = get_env("SEERR_API_KEY", "")
+
 # --- Media path ---
 MEDIA_PATH = get_env("MEDIA_PATH")
 

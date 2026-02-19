@@ -5,6 +5,7 @@ from ..api.sonarr import SonarrClient
 from ..api.jellyfin import JellyfinClient
 from ..api.plex import PlexClient
 from ..api.qbittorrent import QBittorrentClient
+from ..api.seerr import SeerrClient
 from ..models.media import Media, Movie, Season
 from ..utils.disk import get_free_space_gb
 from ..utils.logger import setup_logger
@@ -21,6 +22,7 @@ class MediaDeleter:
         self.jellyfin = JellyfinClient()
         self.plex = PlexClient()
         self.qbt = QBittorrentClient()
+        self.seerr = SeerrClient()
         self._media_path = ""
 
     def delete_for_space(
@@ -289,9 +291,10 @@ class MediaDeleter:
             logger.info("[DRY RUN] Would refresh Plex and Jellyfin libraries.")
             return
 
-        logger.info("Refreshing Plex and Jellyfin libraries...")
+        logger.info("Refreshing Plex, Jellyfin, and Seerr libraries...")
         self.plex.refresh_and_clean()
         self.jellyfin.refresh_library()
+        self.seerr.trigger_availability_sync()
 
     @staticmethod
     def log_summary(deleted_items: list[Media], dry_run: bool) -> None:
