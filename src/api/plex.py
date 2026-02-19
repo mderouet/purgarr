@@ -1,0 +1,94 @@
+import time
+
+import requests
+from typing import Any
+
+from ..config import PLEX_URL, PLEX_TOKEN
+from ..utils.logger import setup_logger
+
+logger = setup_logger()
+
+
+class PlexClient:
+    """Client for interacting with the Plex API."""
+
+    def __init__(self, base_url: str = PLEX_URL, token: str = PLEX_TOKEN):
+        self.base_url = base_url.rstrip("/") if base_url else ""
+        self.token = token
+        self.enabled = bool(self.base_url and self.token)
+        if not self.enabled:
+            logger.info("Plex integration disabled (no URL or token configured).")
+
+    def _get(self, endpoint: str, params: dict[str, Any] | None = None) -> Any | None:
+        if not self.enabled:
+            return None
+        url = f"{self.base_url}{endpoint}"
+        params = params or {}
+        params["X-Plex-Token"] = self.token
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                headers={"Accept": "application/json"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Plex GET {endpoint} failed: {e}")
+            return None
+
+    def _put(self, endpoint: str) -> bool:
+        if not self.enabled:
+            return False
+        url = f"{self.base_url}{endpoint}"
+        try:
+            response = requests.put(
+                url,
+                params={"X-Plex-Token": self.token},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Plex PUT {endpoint} failed: {e}")
+            return False
+
+    def get_library_sections(self) -> list[dict[str, Any]]:
+        """Get all Plex library sections."""
+        if not self.enabled:
+            return []
+        data = self._get("/library/sections")
+        if data and "MediaContainer" in data:
+            return data["MediaContainer"].get("Directory", [])
+        return []
+
+    def refresh_and_clean(self) -> None:
+        """Refresh all library sections and empty trash."""
+        if not self.enabled:
+            return
+
+        sections = self.get_library_sections()
+        media_sections = [
+            s for s in sections if s.get("type") in ("movie", "show")
+        ]
+
+        if not media_sections:
+            logger.warning("No movie/show library sections found in Plex.")
+            return
+
+        for section in media_sections:
+            section_id = section["key"]
+            section_title = section.get("title", section_id)
+            logger.info(f"Refreshing Plex library section: {section_title}")
+            self._get(f"/library/sections/{section_id}/refresh")
+
+        # Wait for Plex to detect missing files
+        logger.info("Waiting 10s for Plex to process library scan...")
+        time.sleep(10)
+
+        for section in media_sections:
+            section_id = section["key"]
+            section_title = section.get("title", section_id)
+            logger.info(f"Emptying Plex trash for section: {section_title}")
+            self._put(f"/library/sections/{section_id}/emptyTrash")
