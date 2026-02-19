@@ -85,7 +85,15 @@ class JellyfinClient:
             },
         )
         if data and data.get("Items"):
-            return data["Items"][0]
+            # Validate the result actually has the expected provider ID
+            for item in data["Items"]:
+                ids = item.get("ProviderIds", {})
+                if ids.get(provider) == provider_id:
+                    return item
+            logger.debug(
+                f"Jellyfin search returned {len(data['Items'])} item(s) for "
+                f"{provider}={provider_id} but none matched."
+            )
         return None
 
     def find_season(

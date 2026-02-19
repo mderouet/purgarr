@@ -145,7 +145,7 @@ class MediaDeleter:
 
         # 1. Get torrent hashes from Sonarr history BEFORE deleting
         torrent_hashes = self._get_sonarr_torrent_hashes(
-            season.sonarr_series_id, season.season_number
+            season.sonarr_series_id, season.season_number, season.episode_ids
         )
 
         # 2. Unmonitor episodes FIRST (prevents Sonarr re-search race)
@@ -221,17 +221,26 @@ class MediaDeleter:
         return list(hashes)
 
     def _get_sonarr_torrent_hashes(
-        self, series_id: int, season_number: int
+        self, series_id: int, season_number: int,
+        episode_ids: list[int] | None = None,
     ) -> list[str]:
         """Extract torrent hashes from Sonarr download history for a season."""
         history = self.sonarr.get_history(series_id)
         hashes = set()
+        episode_id_set = set(episode_ids) if episode_ids else set()
         for record in history:
-            episode = record.get("episode", {})
-            if episode.get("seasonNumber") == season_number:
+            # Primary: match by episodeId (reliable top-level field)
+            if episode_id_set and record.get("episodeId") in episode_id_set:
                 dl_id = record.get("downloadId")
                 if dl_id:
                     hashes.add(dl_id.lower())
+            # Fallback: match by nested episode.seasonNumber
+            elif not episode_id_set:
+                episode = record.get("episode", {})
+                if episode.get("seasonNumber") == season_number:
+                    dl_id = record.get("downloadId")
+                    if dl_id:
+                        hashes.add(dl_id.lower())
         logger.debug(
             f"Found {len(hashes)} torrent hash(es) for Sonarr series {series_id} "
             f"season {season_number} from {len(history)} history record(s)."
@@ -241,14 +250,14 @@ class MediaDeleter:
     def _delete_from_jellyfin_movie(self, movie: Movie) -> str | None:
         """Remove a movie from Jellyfin's database. Returns the deleted item ID."""
         if movie.jellyfin_id:
-            self.jellyfin.delete_item(movie.jellyfin_id)
-            return movie.jellyfin_id
+            if self.jellyfin.delete_item(movie.jellyfin_id):
+                return movie.jellyfin_id
+            return None
 
         # Try to find by IMDb ID
         if movie.imdb_id:
             item = self.jellyfin.find_item_by_provider_id("Imdb", movie.imdb_id)
-            if item:
-                self.jellyfin.delete_item(item["Id"])
+            if item and self.jellyfin.delete_item(item["Id"]):
                 return item["Id"]
 
         logger.debug(f"Could not find '{movie.title}' in Jellyfin to clean up.")
@@ -276,8 +285,9 @@ class MediaDeleter:
             series_jf["Id"], season.season_number
         )
         if jf_season:
-            self.jellyfin.delete_item(jf_season["Id"])
-            return jf_season["Id"]
+            if self.jellyfin.delete_item(jf_season["Id"]):
+                return jf_season["Id"]
+            return None
 
         logger.debug(
             f"Could not find season {season.season_number} of "
