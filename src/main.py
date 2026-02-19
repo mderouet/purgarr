@@ -17,6 +17,7 @@ from .config import (
 from .services.collector import DataCollector
 from .services.analyzer import MediaAnalyzer
 from .services.deleter import MediaDeleter
+from .utils.disk import get_free_space_gb
 from .utils.logger import setup_logger
 
 
@@ -34,6 +35,18 @@ def run_once():
         return
 
     try:
+        # Early exit: if only space mode is active and we have enough free space,
+        # skip the full collection to keep logs quiet on no-op runs.
+        if SPACE_MODE and not AGE_MODE:
+            free = get_free_space_gb(MEDIA_PATH)
+            if free is not None and free >= FREE_SPACE_THRESHOLD_GB:
+                logger.info(
+                    f"No cleanup needed ({free:.2f} GB free >= "
+                    f"{FREE_SPACE_THRESHOLD_GB} GB threshold)"
+                )
+                logger.info("--- Purgarr Run Finished ---")
+                return
+
         collector = DataCollector()
         analyzer = MediaAnalyzer()
         deleter = MediaDeleter()

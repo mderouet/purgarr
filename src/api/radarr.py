@@ -45,10 +45,10 @@ class RadarrClient:
 
     def get_all_movies(self) -> list[dict[str, Any]]:
         """Fetch all movies from Radarr."""
-        logger.info("Fetching all movies from Radarr...")
+        logger.debug("Fetching all movies from Radarr...")
         data = self._get("/api/v3/movie")
         movies = data if isinstance(data, list) else []
-        logger.info(f"Found {len(movies)} movies in Radarr.")
+        logger.debug(f"Found {len(movies)} movies in Radarr.")
         return movies
 
     def get_queue(self) -> list[dict[str, Any]]:
@@ -60,14 +60,21 @@ class RadarrClient:
 
     def get_history(self, movie_id: int) -> list[dict[str, Any]]:
         """Fetch download history for a movie (to get torrent hash)."""
-        data = self._get("/api/v3/history", params={"movieId": movie_id, "pageSize": 50})
-        if data and "records" in data:
-            return data["records"]
-        return []
+        data = self._get(
+            "/api/v3/history",
+            params={
+                "movieId": movie_id,
+                "pageSize": 50,
+            },
+        )
+        if not data or "records" not in data:
+            return []
+        # Safety: filter server-side results by movieId in case the API ignores the filter
+        return [r for r in data["records"] if r.get("movieId") == movie_id]
 
     def delete_movie(self, radarr_id: int, delete_files: bool = True) -> bool:
         """Delete a movie from Radarr and optionally its files."""
-        logger.warning(f"Deleting movie ID {radarr_id} (deleteFiles={delete_files})")
+        logger.debug(f"Deleting movie ID {radarr_id} (deleteFiles={delete_files})")
         return self._delete(
             f"/api/v3/movie/{radarr_id}",
             params={"deleteFiles": str(delete_files).lower()},

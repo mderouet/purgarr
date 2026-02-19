@@ -69,7 +69,7 @@ class JellyfinClient:
             )
             if data and "Items" in data:
                 items.extend(data["Items"])
-        logger.info(f"Found {len(items)} items in Jellyfin with play data.")
+        logger.debug(f"Found {len(items)} items in Jellyfin with play data.")
         return items
 
     def find_item_by_provider_id(
@@ -103,10 +103,10 @@ class JellyfinClient:
 
     def delete_item(self, item_id: str) -> bool:
         """Delete an item from Jellyfin's database."""
-        logger.info(f"Deleting Jellyfin item {item_id}")
+        logger.debug(f"Deleting Jellyfin item {item_id}")
         return self._delete(f"/Items/{item_id}")
 
     def refresh_library(self) -> bool:
         """Trigger a full library refresh."""
-        logger.info("Triggering Jellyfin library refresh...")
+        logger.debug("Triggering Jellyfin library refresh...")
         return self._post("/Library/Refresh")

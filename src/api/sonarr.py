@@ -57,10 +57,10 @@ class SonarrClient:
 
     def get_all_series(self) -> list[dict[str, Any]]:
         """Fetch all TV series from Sonarr."""
-        logger.info("Fetching all series from Sonarr...")
+        logger.debug("Fetching all series from Sonarr...")
         data = self._get("/api/v3/series")
         series = data if isinstance(data, list) else []
-        logger.info(f"Found {len(series)} series in Sonarr.")
+        logger.debug(f"Found {len(series)} series in Sonarr.")
         return series
 
     def get_episode_files(self, series_id: int) -> list[dict[str, Any]]:
@@ -84,17 +84,21 @@ class SonarrClient:
         """Fetch download history for a series (to get torrent hashes)."""
         data = self._get(
             "/api/v3/history",
-            params={"seriesId": series_id, "pageSize": 200},
+            params={
+                "seriesId": series_id,
+                "pageSize": 200,
+            },
         )
-        if data and "records" in data:
-            return data["records"]
-        return []
+        if not data or "records" not in data:
+            return []
+        # Safety: filter server-side results by seriesId in case the API ignores the filter
+        return [r for r in data["records"] if r.get("seriesId") == series_id]
 
     def unmonitor_episodes(self, episode_ids: list[int]) -> bool:
         """Unmonitor a list of episodes by their IDs."""
         if not episode_ids:
             return True
-        logger.info(f"Unmonitoring {len(episode_ids)} episodes...")
+        logger.debug(f"Unmonitoring {len(episode_ids)} episodes...")
         return self._put(
             "/api/v3/episode/monitor",
             json_data={"episodeIds": episode_ids, "monitored": False},
@@ -107,7 +111,7 @@ class SonarrClient:
 
     def delete_series(self, series_id: int, delete_files: bool = True) -> bool:
         """Delete an entire series from Sonarr."""
-        logger.warning(f"Deleting series ID {series_id} (deleteFiles={delete_files})")
+        logger.debug(f"Deleting series ID {series_id} (deleteFiles={delete_files})")
         return self._delete(
             f"/api/v3/series/{series_id}",
             params={"deleteFiles": str(delete_files).lower()},

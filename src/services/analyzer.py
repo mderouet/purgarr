@@ -40,7 +40,7 @@ class MediaAnalyzer:
         not_recently_played.sort(key=lambda m: m.added_date or epoch)
         recently_played.sort(key=lambda m: m.added_date or epoch)
 
-        logger.info(
+        logger.debug(
             f"Sorted {len(not_recently_played)} items by age, "
             f"{len(recently_played)} recently-played items deprioritized."
         )

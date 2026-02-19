@@ -38,6 +38,23 @@ class PlexClient:
             logger.error(f"Plex GET {endpoint} failed: {e}")
             return None
 
+    def _get_no_body(self, endpoint: str) -> bool:
+        """Send a GET request that returns no JSON body (e.g. refresh, scan)."""
+        if not self.enabled:
+            return False
+        url = f"{self.base_url}{endpoint}"
+        try:
+            response = requests.get(
+                url,
+                params={"X-Plex-Token": self.token},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Plex GET {endpoint} failed: {e}")
+            return False
+
     def _put(self, endpoint: str) -> bool:
         if not self.enabled:
             return False
@@ -80,15 +97,15 @@ class PlexClient:
         for section in media_sections:
             section_id = section["key"]
             section_title = section.get("title", section_id)
-            logger.info(f"Refreshing Plex library section: {section_title}")
-            self._get(f"/library/sections/{section_id}/refresh")
+            logger.debug(f"Refreshing Plex library section: {section_title}")
+            self._get_no_body(f"/library/sections/{section_id}/refresh")
 
         # Wait for Plex to detect missing files
-        logger.info("Waiting 10s for Plex to process library scan...")
+        logger.debug("Waiting 10s for Plex to process library scan...")
         time.sleep(10)
 
         for section in media_sections:
             section_id = section["key"]
             section_title = section.get("title", section_id)
-            logger.info(f"Emptying Plex trash for section: {section_title}")
+            logger.debug(f"Emptying Plex trash for section: {section_title}")
             self._put(f"/library/sections/{section_id}/emptyTrash")

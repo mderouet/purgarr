@@ -19,7 +19,7 @@ class DataCollector:
 
     def collect_all_media(self) -> list[Media]:
         """Collect all deletable media units (movies + seasons)."""
-        logger.info("Starting data collection...")
+        logger.debug("Starting data collection...")
 
         movies = self._collect_movies()
         seasons = self._collect_seasons()

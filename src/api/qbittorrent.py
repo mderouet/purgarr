@@ -98,7 +98,7 @@ class QBittorrentClient:
         if not self.enabled or not hashes:
             return True
         joined = "|".join(hashes)
-        logger.info(f"Deleting {len(hashes)} torrents from qBittorrent...")
+        logger.debug(f"Deleting {len(hashes)} torrents from qBittorrent...")
         return self._post(
             "/api/v2/torrents/delete",
             data={"hashes": joined, "deleteFiles": str(delete_files).lower()},
