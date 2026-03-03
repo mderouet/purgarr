@@ -99,9 +99,13 @@ class JellyfinClient:
     def find_season(
         self, series_jellyfin_id: str, season_number: int
     ) -> dict[str, Any] | None:
-        """Find a specific season item within a Jellyfin series."""
+        """Find a specific season item within a Jellyfin series.
+
+        Includes UserData with UnplayedItemCount for watch progress tracking.
+        """
         data = self._get(
             f"/Shows/{series_jellyfin_id}/Seasons",
+            params={"Fields": "UserData"},
         )
         if data and "Items" in data:
             for season in data["Items"]:

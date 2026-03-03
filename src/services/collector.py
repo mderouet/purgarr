@@ -27,8 +27,13 @@ class DataCollector:
         seasons = self._collect_seasons()
         all_media: list[Media] = movies + seasons
 
-        self._enrich_with_jellyfin_play_data(all_media)
-        self._enrich_with_plex_play_data(all_media)
+        # Movies: series-level enrichment
+        self._enrich_with_jellyfin_play_data(movies)
+        self._enrich_with_plex_play_data(movies)
+
+        # Seasons: per-season enrichment for watch progress
+        self._enrich_seasons_with_jellyfin_play_data(seasons)
+        self._enrich_seasons_with_plex_play_data(seasons)
 
         logger.info(
             f"Collection complete: {len(movies)} movies, {len(seasons)} seasons."
@@ -172,8 +177,8 @@ class DataCollector:
 
         logger.info(f"Enriched {matched}/{len(media_list)} items with Jellyfin play data.")
 
-    def _enrich_with_plex_play_data(self, media_list: list[Media]) -> None:
-        """Enrich media items with Plex viewCount and lastViewedAt.
+    def _enrich_with_plex_play_data(self, movies: list[Movie]) -> None:
+        """Enrich movies with Plex viewCount and lastViewedAt.
 
         Merges with existing Jellyfin data: keeps the most recent
         last_played_date from either source, and sums play counts.
@@ -187,52 +192,174 @@ class DataCollector:
             logger.warning(f"Failed to get Plex play data (non-fatal): {e}")
             return
 
-        # Build lookup by IMDb ID
+        # Build lookup by IMDb ID (movies only)
         plex_by_imdb: dict[str, dict] = {}
         for item in plex_items:
-            imdb_id = PlexClient.extract_imdb_id(item)
-            if imdb_id:
-                plex_by_imdb[imdb_id] = item
+            if item.get("type") == "movie":
+                imdb_id = PlexClient.extract_imdb_id(item)
+                if imdb_id:
+                    plex_by_imdb[imdb_id] = item
 
         matched = 0
-        for media in media_list:
-            imdb_id = None
-            if isinstance(media, Movie):
-                imdb_id = media.imdb_id
-            elif isinstance(media, Season):
-                imdb_id = media.imdb_id
-
-            if not imdb_id or imdb_id not in plex_by_imdb:
+        for movie in movies:
+            if not movie.imdb_id or movie.imdb_id not in plex_by_imdb:
                 continue
 
-            plex_item = plex_by_imdb[imdb_id]
-            media.plex_id = str(plex_item.get("ratingKey", ""))
+            plex_item = plex_by_imdb[movie.imdb_id]
+            movie.plex_id = str(plex_item.get("ratingKey", ""))
 
             plex_view_count = plex_item.get("viewCount", 0)
             plex_last_viewed = plex_item.get("lastViewedAt")
 
-            # Convert Plex epoch seconds to datetime
             plex_last_played: datetime | None = None
             if plex_last_viewed:
                 plex_last_played = datetime.fromtimestamp(
                     plex_last_viewed, tz=timezone.utc
                 )
 
-            # Merge: keep the most recent last_played_date from either source
             if plex_last_played:
                 if (
-                    media.last_played_date is None
-                    or plex_last_played > media.last_played_date
+                    movie.last_played_date is None
+                    or plex_last_played > movie.last_played_date
                 ):
-                    media.last_played_date = plex_last_played
+                    movie.last_played_date = plex_last_played
 
-            # Sum play counts from both sources
-            media.play_count += plex_view_count
-
+            movie.play_count += plex_view_count
             matched += 1
 
         logger.info(
-            f"Enriched {matched}/{len(media_list)} items with Plex play data."
+            f"Enriched {matched}/{len(movies)} movies with Plex play data."
+        )
+
+    def _enrich_seasons_with_jellyfin_play_data(
+        self, seasons: list[Season]
+    ) -> None:
+        """Enrich seasons with Jellyfin per-season watch progress."""
+        try:
+            jf_items = self.jellyfin.get_all_items_with_play_data()
+        except Exception as e:
+            logger.warning(f"Failed to get Jellyfin data for seasons (non-fatal): {e}")
+            return
+
+        # Build lookup of Jellyfin series by IMDb ID
+        jf_series_by_imdb: dict[str, dict] = {}
+        for item in jf_items:
+            provider_ids = item.get("ProviderIds", {})
+            imdb = provider_ids.get("Imdb")
+            if imdb and item.get("Type") == "Series":
+                jf_series_by_imdb[imdb] = item
+
+        matched = 0
+        for season in seasons:
+            if not season.imdb_id or season.imdb_id not in jf_series_by_imdb:
+                continue
+
+            jf_series = jf_series_by_imdb[season.imdb_id]
+            jf_season = self.jellyfin.find_season(
+                jf_series["Id"], season.season_number
+            )
+            if not jf_season:
+                continue
+
+            user_data = jf_season.get("UserData", {})
+            season.jellyfin_id = jf_season.get("Id")
+
+            # Compute watched episodes from ChildCount - UnplayedItemCount
+            child_count = jf_season.get("ChildCount", 0) or 0
+            unplayed = user_data.get("UnplayedItemCount", child_count) or 0
+            season.total_episodes = max(season.total_episodes, child_count)
+            season.watched_episodes = max(
+                season.watched_episodes, child_count - unplayed
+            )
+
+            last_played = user_data.get("LastPlayedDate")
+            if last_played:
+                jf_last = self._parse_date(last_played)
+                if jf_last and (
+                    season.last_played_date is None
+                    or jf_last > season.last_played_date
+                ):
+                    season.last_played_date = jf_last
+
+            season.play_count = max(
+                season.play_count, user_data.get("PlayCount", 0)
+            )
+            matched += 1
+
+        logger.info(
+            f"Enriched {matched}/{len(seasons)} seasons with Jellyfin play data."
+        )
+
+    def _enrich_seasons_with_plex_play_data(self, seasons: list[Season]) -> None:
+        """Enrich seasons with Plex per-season watch progress."""
+        if not self.plex.enabled:
+            return
+
+        try:
+            plex_items = self.plex.get_all_items_with_play_data()
+        except Exception as e:
+            logger.warning(f"Failed to get Plex data for seasons (non-fatal): {e}")
+            return
+
+        # Build lookup of Plex shows by IMDb ID
+        plex_shows_by_imdb: dict[str, dict] = {}
+        for item in plex_items:
+            if item.get("type") == "show":
+                imdb_id = PlexClient.extract_imdb_id(item)
+                if imdb_id:
+                    plex_shows_by_imdb[imdb_id] = item
+
+        # Cache season data per show to avoid duplicate API calls
+        show_seasons_cache: dict[str, list[dict]] = {}
+
+        matched = 0
+        for season in seasons:
+            if not season.imdb_id or season.imdb_id not in plex_shows_by_imdb:
+                continue
+
+            plex_show = plex_shows_by_imdb[season.imdb_id]
+            rating_key = str(plex_show["ratingKey"])
+
+            # Fetch seasons for this show (cached)
+            if rating_key not in show_seasons_cache:
+                show_seasons_cache[rating_key] = self.plex.get_show_seasons(
+                    rating_key
+                )
+
+            plex_seasons = show_seasons_cache[rating_key]
+            plex_season = next(
+                (s for s in plex_seasons if s.get("index") == season.season_number),
+                None,
+            )
+            if not plex_season:
+                continue
+
+            season.plex_id = str(plex_season.get("ratingKey", ""))
+
+            # Watch progress
+            leaf_count = plex_season.get("leafCount", 0) or 0
+            viewed_count = plex_season.get("viewedLeafCount", 0) or 0
+            season.total_episodes = max(season.total_episodes, leaf_count)
+            season.watched_episodes = max(season.watched_episodes, viewed_count)
+
+            # Season-level last viewed date
+            plex_last_viewed = plex_season.get("lastViewedAt")
+            if plex_last_viewed:
+                plex_last_played = datetime.fromtimestamp(
+                    plex_last_viewed, tz=timezone.utc
+                )
+                if (
+                    season.last_played_date is None
+                    or plex_last_played > season.last_played_date
+                ):
+                    season.last_played_date = plex_last_played
+
+            plex_view_count = plex_season.get("viewCount", 0) or 0
+            season.play_count = max(season.play_count, plex_view_count)
+            matched += 1
+
+        logger.info(
+            f"Enriched {matched}/{len(seasons)} seasons with Plex play data."
         )
 
     def _parse_date(self, date_str: str | None) -> datetime | None:

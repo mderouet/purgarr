@@ -59,6 +59,7 @@ def run_once():
 
         # Sort by deletion priority
         sorted_media = analyzer.sort_for_deletion(all_media)
+        analyzer.log_deletion_order(sorted_media)
 
         all_deleted = []
 

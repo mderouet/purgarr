@@ -79,14 +79,21 @@ class MediaDeleter:
         """Delete a single media item from all services."""
         size_gb = media.file_size / (1024**3)
         added = media.added_date.strftime("%Y-%m-%d") if media.added_date else "unknown"
-
         last_played = media.last_played_date.strftime("%Y-%m-%d") if media.last_played_date else "never"
 
+        watch_info = ""
+        if isinstance(media, Season) and media.total_episodes > 0:
+            watch_info = f", {media.watched_episodes}/{media.total_episodes} eps watched"
+        elif isinstance(media, Movie) and media.play_count > 0:
+            watch_info = f", viewed x{media.play_count}"
+
+        desc = f"'{media.title}' ({size_gb:.2f} GB, added {added}, last played {last_played}{watch_info})"
+
         if dry_run:
-            logger.info(f"[DRY RUN] Would delete '{media.title}' ({size_gb:.2f} GB, added {added}, last played {last_played})")
+            logger.info(f"[DRY RUN] Would delete {desc}")
             return True
 
-        logger.info(f"Deleting '{media.title}' ({size_gb:.2f} GB, added {added}, last played {last_played})...")
+        logger.info(f"Deleting {desc}...")
 
         if isinstance(media, Movie):
             return self._delete_movie(media)
@@ -318,17 +325,24 @@ class MediaDeleter:
             return
 
         total_freed = sum(m.file_size for m in deleted_items)
-        headers = ["Title", "Type", "Size (GB)", "Added Date", "Last Played"]
+        headers = ["Title", "Type", "Size (GB)", "Added Date", "Last Played", "Watch"]
         rows = []
         for item in deleted_items:
             added = item.added_date.date() if item.added_date else "Unknown"
             last_played = item.last_played_date.date() if item.last_played_date else "Never"
+            if isinstance(item, Season) and item.total_episodes > 0:
+                watch = f"{item.watched_episodes}/{item.total_episodes} eps"
+            elif isinstance(item, Movie) and item.play_count > 0:
+                watch = f"x{item.play_count}"
+            else:
+                watch = "-"
             rows.append([
                 item.title,
                 item.__class__.__name__,
                 f"{item.file_size / (1024**3):.2f}",
                 added,
                 last_played,
+                watch,
             ])
 
         summary = "Dry Run Summary" if dry_run else "Deletion Summary"

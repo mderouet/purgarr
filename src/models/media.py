@@ -16,6 +16,11 @@ class Media:
     last_played_date: datetime | None = None
     play_count: int = 0
 
+    @property
+    def is_fully_watched(self) -> bool:
+        """Whether this media has been fully consumed."""
+        return False  # Overridden in subclasses
+
     def __repr__(self) -> str:
         added = self.added_date.date() if self.added_date else "unknown"
         size_gb = self.file_size / (1024**3)
@@ -30,6 +35,10 @@ class Movie(Media):
     imdb_id: str | None = None
     tmdb_id: int | None = None
 
+    @property
+    def is_fully_watched(self) -> bool:
+        return self.play_count > 0
+
 
 @dataclass
 class Season(Media):
@@ -42,3 +51,9 @@ class Season(Media):
     episode_ids: list[int] = field(default_factory=list)
     imdb_id: str | None = None
     tvdb_id: int | None = None
+    total_episodes: int = 0
+    watched_episodes: int = 0
+
+    @property
+    def is_fully_watched(self) -> bool:
+        return self.total_episodes > 0 and self.watched_episodes >= self.total_episodes

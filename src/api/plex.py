@@ -121,6 +121,19 @@ class PlexClient:
                 return guid_str[7:]
         return None
 
+    def get_show_seasons(self, show_rating_key: str) -> list[dict[str, Any]]:
+        """Fetch all seasons for a show with watch progress.
+
+        Returns season dicts with index (season number), viewedLeafCount,
+        leafCount, and lastViewedAt.
+        """
+        if not self.enabled:
+            return []
+        data = self._get(f"/library/metadata/{show_rating_key}/children")
+        if data and "MediaContainer" in data:
+            return data["MediaContainer"].get("Metadata", [])
+        return []
+
     def refresh_and_clean(self) -> None:
         """Refresh all library sections and empty trash."""
         if not self.enabled:
