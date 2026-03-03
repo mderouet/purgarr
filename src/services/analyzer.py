@@ -1,12 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from ..models.media import Media
 from ..utils.logger import setup_logger
 
 logger = setup_logger()
-
-# Items played in the last N days are deprioritized (moved to end of list)
-RECENT_PLAY_DAYS = 30
 
 
 class MediaAnalyzer:
@@ -14,38 +11,39 @@ class MediaAnalyzer:
 
     def sort_for_deletion(self, media_list: list[Media]) -> list[Media]:
         """
-        Sort media by deletion priority: oldest added_date first,
-        with recently-played items deprioritized to the end.
+        Sort media by deletion priority using a "relevance date" approach.
+
+        The relevance date is:
+          - last_played_date if the item has been watched
+          - added_date if the item has never been watched
+
+        Sort ascending (oldest relevance date first = delete first).
+        This naturally produces:
+          1. Watched long ago          → delete first
+          2. Never watched, added long ago → delete next
+          3. Never watched, added recently → protect
+          4. Watched recently           → protect most
         """
         if not media_list:
             return []
 
-        recent_threshold = datetime.now(timezone.utc) - timedelta(days=RECENT_PLAY_DAYS)
-
-        recently_played = []
-        not_recently_played = []
-
-        for media in media_list:
-            if (
-                media.last_played_date
-                and media.last_played_date > recent_threshold
-            ):
-                recently_played.append(media)
-            else:
-                not_recently_played.append(media)
-
-        # Sort each group by added_date (oldest first)
-        # Items with no added_date go first (unknown age = delete first)
         epoch = datetime.min.replace(tzinfo=timezone.utc)
-        not_recently_played.sort(key=lambda m: m.added_date or epoch)
-        recently_played.sort(key=lambda m: m.added_date or epoch)
 
+        def relevance_date(media: Media) -> datetime:
+            if media.last_played_date:
+                return media.last_played_date
+            return media.added_date or epoch
+
+        sorted_list = sorted(media_list, key=relevance_date)
+
+        watched = sum(1 for m in media_list if m.last_played_date)
+        unwatched = len(media_list) - watched
         logger.debug(
-            f"Sorted {len(not_recently_played)} items by age, "
-            f"{len(recently_played)} recently-played items deprioritized."
+            f"Sorted {len(media_list)} items by relevance date "
+            f"({watched} watched, {unwatched} unwatched)."
         )
 
-        return not_recently_played + recently_played
+        return sorted_list
 
     def filter_by_age(
         self, media_list: list[Media], max_age_days: int

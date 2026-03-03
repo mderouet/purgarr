@@ -80,6 +80,47 @@ class PlexClient:
             return data["MediaContainer"].get("Directory", [])
         return []
 
+    def get_all_items_with_play_data(self) -> list[dict[str, Any]]:
+        """Fetch all movies and shows from Plex with play data.
+
+        Returns a flat list of Plex metadata dicts containing lastViewedAt
+        (epoch seconds), viewCount, and Guid array for provider ID matching.
+        """
+        if not self.enabled:
+            return []
+
+        sections = self.get_library_sections()
+        media_sections = [
+            s for s in sections if s.get("type") in ("movie", "show")
+        ]
+
+        items = []
+        for section in media_sections:
+            section_id = section["key"]
+            data = self._get(
+                f"/library/sections/{section_id}/all",
+                params={"includeGuids": 1},
+            )
+            if data and "MediaContainer" in data:
+                metadata = data["MediaContainer"].get("Metadata", [])
+                items.extend(metadata)
+
+        logger.debug(f"Found {len(items)} items in Plex with play data.")
+        return items
+
+    @staticmethod
+    def extract_imdb_id(plex_item: dict[str, Any]) -> str | None:
+        """Extract IMDb ID from a Plex item's Guid array.
+
+        Plex returns guids like: [{"id": "imdb://tt1234567"}, {"id": "tmdb://123"}]
+        """
+        guids = plex_item.get("Guid", [])
+        for guid in guids:
+            guid_str = guid.get("id", "")
+            if guid_str.startswith("imdb://"):
+                return guid_str[7:]
+        return None
+
     def refresh_and_clean(self) -> None:
         """Refresh all library sections and empty trash."""
         if not self.enabled:

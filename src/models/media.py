@@ -10,8 +10,9 @@ class Media:
     added_date: datetime | None
     file_size: int  # bytes
 
-    # Jellyfin play data (for deprioritization)
+    # Play data (from Jellyfin and/or Plex, for deletion priority)
     jellyfin_id: str | None = None
+    plex_id: str | None = None
     last_played_date: datetime | None = None
     play_count: int = 0
 
