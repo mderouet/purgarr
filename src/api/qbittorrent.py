@@ -94,12 +94,86 @@ class QBittorrentClient:
     def delete_torrents_by_hashes(
         self, hashes: list[str], delete_files: bool = True
     ) -> bool:
-        """Delete multiple torrents by their hashes."""
+        """Delete multiple torrents by their hashes.
+
+        Deletes as a batch first, then verifies all were removed.
+        Any survivors are retried individually.
+        """
         if not self.enabled or not hashes:
             return True
+
+        # Batch delete
         joined = "|".join(hashes)
         logger.debug(f"Deleting {len(hashes)} torrents from qBittorrent...")
-        return self._post(
+        success = self._post(
             "/api/v2/torrents/delete",
             data={"hashes": joined, "deleteFiles": str(delete_files).lower()},
         )
+        if not success:
+            logger.error("qBittorrent batch delete API call failed.")
+
+        # Verify deletion — some torrents may silently survive
+        survivors = self.verify_torrents_deleted(hashes)
+        if not survivors:
+            return True
+
+        # Retry survivors individually
+        logger.warning(
+            f"{len(survivors)} torrent(s) survived batch delete, "
+            "retrying individually..."
+        )
+        still_alive = []
+        for h in survivors:
+            ok = self._post(
+                "/api/v2/torrents/delete",
+                data={"hashes": h, "deleteFiles": str(delete_files).lower()},
+            )
+            if not ok:
+                logger.error(f"Individual delete failed for torrent {h[:8]}")
+                still_alive.append(h)
+
+        # Final verification
+        if still_alive:
+            final_survivors = self.verify_torrents_deleted(still_alive)
+            if final_survivors:
+                short = ", ".join(h[:8] for h in final_survivors)
+                logger.error(
+                    f"{len(final_survivors)} torrent(s) could not be deleted "
+                    f"from qBittorrent: {short}"
+                )
+                return False
+
+        return True
+
+    def get_all_torrents(self) -> list[dict[str, Any]]:
+        """Fetch all torrents from qBittorrent."""
+        if not self.enabled:
+            return []
+        data = self._get("/api/v2/torrents/info")
+        return data if isinstance(data, list) else []
+
+    def find_torrents_by_content_path(
+        self, path_substring: str
+    ) -> list[dict[str, Any]]:
+        """Find torrents whose content_path or save_path contains the substring."""
+        if not self.enabled or not path_substring:
+            return []
+        torrents = self.get_all_torrents()
+        needle = path_substring.lower()
+        return [
+            t for t in torrents
+            if needle in (t.get("content_path", "").lower())
+            or needle in (t.get("save_path", "").lower())
+            or needle in (t.get("name", "").lower())
+        ]
+
+    def verify_torrents_deleted(self, hashes: list[str]) -> list[str]:
+        """Check which of the given hashes still exist in qBittorrent.
+
+        Returns a list of hashes that are still present (survivors).
+        """
+        if not self.enabled or not hashes:
+            return []
+        torrents = self.get_all_torrents()
+        existing = {t["hash"].lower() for t in torrents}
+        return [h for h in hashes if h.lower() in existing]

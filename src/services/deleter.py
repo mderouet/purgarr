@@ -121,15 +121,7 @@ class MediaDeleter:
         logger.info(f"  Radarr: deleted movie #{movie.radarr_id}")
 
         # 3. Clean up download files via qBittorrent
-        if torrent_hashes:
-            short_hashes = ", ".join(h[:8] for h in torrent_hashes)
-            self.qbt.delete_torrents_by_hashes(torrent_hashes)
-            logger.info(
-                f"  qBittorrent: deleted {len(torrent_hashes)} torrent(s) "
-                f"(hash: {short_hashes})"
-            )
-        else:
-            logger.info("  qBittorrent: no torrents found in history")
+        self._cleanup_qbt_torrents(torrent_hashes, movie.title)
 
         # 4. Remove from Jellyfin
         jf_id = self._delete_from_jellyfin_movie(movie)
@@ -138,9 +130,7 @@ class MediaDeleter:
         else:
             logger.info("  Jellyfin: item not found (already removed or not indexed)")
 
-        free_after = get_free_space_gb(self._media_path)
-        if free_before is not None and free_after is not None:
-            logger.info(f"  Disk: {free_before:.2f} -> {free_after:.2f} GB free")
+        self._log_disk_delta(free_before)
 
         return True
 
@@ -182,15 +172,7 @@ class MediaDeleter:
         self._cleanup_empty_series(season.sonarr_series_id)
 
         # 5. Clean up download files via qBittorrent
-        if torrent_hashes:
-            short_hashes = ", ".join(h[:8] for h in torrent_hashes)
-            self.qbt.delete_torrents_by_hashes(torrent_hashes)
-            logger.info(
-                f"  qBittorrent: deleted {len(torrent_hashes)} torrent(s) "
-                f"(hash: {short_hashes})"
-            )
-        else:
-            logger.info("  qBittorrent: no torrents found in history")
+        self._cleanup_qbt_torrents(torrent_hashes, season.series_title)
 
         # 6. Remove from Jellyfin
         jf_id = self._delete_from_jellyfin_season(season)
@@ -199,11 +181,78 @@ class MediaDeleter:
         else:
             logger.info("  Jellyfin: season not found (already removed or not indexed)")
 
-        free_after = get_free_space_gb(self._media_path)
-        if free_before is not None and free_after is not None:
-            logger.info(f"  Disk: {free_before:.2f} -> {free_after:.2f} GB free")
+        self._log_disk_delta(free_before)
 
         return True
+
+    def _cleanup_qbt_torrents(
+        self, torrent_hashes: list[str], search_name: str
+    ) -> None:
+        """Delete torrents from qBittorrent using history hashes, with fallback.
+
+        If history-based hashes are available, deletes them (with verification).
+        If no hashes found in history, falls back to searching qBittorrent
+        by content name to find orphaned torrents.
+        """
+        if torrent_hashes:
+            short_hashes = ", ".join(h[:8] for h in torrent_hashes)
+            ok = self.qbt.delete_torrents_by_hashes(torrent_hashes)
+            if ok:
+                logger.info(
+                    f"  qBittorrent: deleted {len(torrent_hashes)} torrent(s) "
+                    f"(hash: {short_hashes})"
+                )
+            else:
+                logger.error(
+                    f"  qBittorrent: FAILED to delete some torrent(s) "
+                    f"(hash: {short_hashes})"
+                )
+        else:
+            logger.info(
+                "  qBittorrent: no torrents found in history, "
+                "searching by content name..."
+            )
+            self._fallback_qbt_search(search_name)
+
+    def _fallback_qbt_search(self, search_name: str) -> None:
+        """Search qBittorrent for torrents matching the media name and delete them."""
+        matches = self.qbt.find_torrents_by_content_path(search_name)
+        if not matches:
+            logger.info(
+                f"  qBittorrent: no matching torrents found for '{search_name}'"
+            )
+            return
+
+        hashes = [t["hash"] for t in matches]
+        names = [t.get("name", "?") for t in matches]
+        logger.info(
+            f"  qBittorrent: found {len(matches)} torrent(s) by name search: "
+            + ", ".join(names)
+        )
+        ok = self.qbt.delete_torrents_by_hashes(hashes)
+        if ok:
+            logger.info(
+                f"  qBittorrent: deleted {len(hashes)} torrent(s) via fallback"
+            )
+        else:
+            logger.error(
+                "  qBittorrent: FAILED to delete torrents found via fallback"
+            )
+
+    def _log_disk_delta(self, free_before: float | None) -> None:
+        """Log disk space change after a deletion and warn if nothing was freed."""
+        free_after = get_free_space_gb(self._media_path)
+        if free_before is None or free_after is None:
+            return
+
+        logger.info(f"  Disk: {free_before:.2f} -> {free_after:.2f} GB free")
+
+        delta = free_after - free_before
+        if delta < 0.01:
+            logger.warning(
+                "  Deletion freed 0 bytes — download files may still exist "
+                "(hardlink or qBittorrent cleanup failed)"
+            )
 
     def _cleanup_empty_series(self, series_id: int) -> None:
         """If a series has no remaining episode files, delete it from Sonarr."""
@@ -316,7 +365,12 @@ class MediaDeleter:
         self.seerr.trigger_availability_sync()
 
     @staticmethod
-    def log_summary(deleted_items: list[Media], dry_run: bool) -> None:
+    def log_summary(
+        deleted_items: list[Media],
+        dry_run: bool,
+        disk_before_gb: float | None = None,
+        disk_after_gb: float | None = None,
+    ) -> None:
         """Log a summary table of what was deleted."""
         action = "would be" if dry_run else "were"
 
@@ -324,7 +378,7 @@ class MediaDeleter:
             logger.info("No items were deleted.")
             return
 
-        total_freed = sum(m.file_size for m in deleted_items)
+        total_file_size = sum(m.file_size for m in deleted_items)
         headers = ["Title", "Type", "Size (GB)", "Added Date", "Last Played", "Watch"]
         rows = []
         for item in deleted_items:
@@ -348,7 +402,19 @@ class MediaDeleter:
         summary = "Dry Run Summary" if dry_run else "Deletion Summary"
         logger.info(f"\n--- {summary} ---")
         logger.info(f"\n{tabulate(rows, headers=headers, tablefmt='grid')}\n")
+
+        size_msg = f"File sizes: {total_file_size / (1024**3):.2f} GB"
+        if disk_before_gb is not None and disk_after_gb is not None:
+            actual_freed = disk_after_gb - disk_before_gb
+            size_msg += f". Actual disk freed: {actual_freed:.2f} GB"
+            if total_file_size > 0:
+                ratio = (actual_freed * (1024**3)) / total_file_size
+                if ratio < 0.5:
+                    logger.warning(
+                        f"Only {ratio:.0%} of file sizes were actually freed — "
+                        "some download files may be orphaned on disk."
+                    )
+
         logger.info(
-            f"{len(deleted_items)} items {action} deleted. "
-            f"Total space {action} freed: {total_freed / (1024**3):.2f} GB."
+            f"{len(deleted_items)} items {action} deleted. {size_msg}."
         )

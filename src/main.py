@@ -62,6 +62,7 @@ def run_once():
         analyzer.log_deletion_order(sorted_media)
 
         all_deleted = []
+        disk_before = get_free_space_gb(MEDIA_PATH)
 
         # Age mode: delete everything older than MAX_AGE_DAYS
         if AGE_MODE:
@@ -89,7 +90,8 @@ def run_once():
             deleter.post_cleanup(DRY_RUN)
 
         # Summary
-        deleter.log_summary(all_deleted, DRY_RUN)
+        disk_after = get_free_space_gb(MEDIA_PATH)
+        deleter.log_summary(all_deleted, DRY_RUN, disk_before, disk_after)
 
     except ConfigError as e:
         logger.error(f"Configuration Error: {e}")
