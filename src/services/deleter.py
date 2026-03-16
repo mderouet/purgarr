@@ -66,9 +66,10 @@ class MediaDeleter:
         return deleted
 
     def delete_list(
-        self, media_list: list[Media], dry_run: bool
+        self, media_list: list[Media], media_path: str, dry_run: bool
     ) -> list[Media]:
         """Delete all items in the list (age mode)."""
+        self._media_path = media_path
         deleted = []
         for media in media_list:
             if self._delete_media(media, dry_run):
@@ -172,7 +173,9 @@ class MediaDeleter:
         self._cleanup_empty_series(season.sonarr_series_id)
 
         # 5. Clean up download files via qBittorrent
-        self._cleanup_qbt_torrents(torrent_hashes, season.series_title)
+        # Use season-specific search term to avoid matching other seasons
+        season_search = f"{season.series_title} S{season.season_number:02d}"
+        self._cleanup_qbt_torrents(torrent_hashes, season_search)
 
         # 6. Remove from Jellyfin
         jf_id = self._delete_from_jellyfin_season(season)
@@ -240,19 +243,12 @@ class MediaDeleter:
             )
 
     def _log_disk_delta(self, free_before: float | None) -> None:
-        """Log disk space change after a deletion and warn if nothing was freed."""
+        """Log disk space change after a deletion."""
         free_after = get_free_space_gb(self._media_path)
         if free_before is None or free_after is None:
             return
 
         logger.info(f"  Disk: {free_before:.2f} -> {free_after:.2f} GB free")
-
-        delta = free_after - free_before
-        if delta < 0.01:
-            logger.warning(
-                "  Deletion freed 0 bytes — download files may still exist "
-                "(hardlink or qBittorrent cleanup failed)"
-            )
 
     def _cleanup_empty_series(self, series_id: int) -> None:
         """If a series has no remaining episode files, delete it from Sonarr."""
@@ -407,7 +403,7 @@ class MediaDeleter:
         if disk_before_gb is not None and disk_after_gb is not None:
             actual_freed = disk_after_gb - disk_before_gb
             size_msg += f". Actual disk freed: {actual_freed:.2f} GB"
-            if total_file_size > 0:
+            if total_file_size > 0 and actual_freed >= 0:
                 ratio = (actual_freed * (1024**3)) / total_file_size
                 if ratio < 0.5:
                     logger.warning(

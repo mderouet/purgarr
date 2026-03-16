@@ -1,3 +1,5 @@
+import re
+import time
 import requests
 from typing import Any
 
@@ -5,6 +7,8 @@ from ..config import QBITTORRENT_URL, QBITTORRENT_USERNAME, QBITTORRENT_PASSWORD
 from ..utils.logger import setup_logger
 
 logger = setup_logger()
+
+_VERIFY_DELAY_SECONDS = 2
 
 
 class QBittorrentClient:
@@ -22,6 +26,8 @@ class QBittorrentClient:
         self.enabled = bool(self.base_url)
         self.session = requests.Session()
         self._authenticated = False
+        self._torrent_cache: list[dict[str, Any]] | None = None
+        self._cache_time: float = 0
 
         if not self.enabled:
             logger.info("qBittorrent integration disabled (no URL configured).")
@@ -70,26 +76,12 @@ class QBittorrentClient:
                 f"{self.base_url}{endpoint}", data=data, timeout=30
             )
             response.raise_for_status()
+            # Invalidate cache after mutations
+            self._torrent_cache = None
             return True
         except requests.exceptions.RequestException as e:
             logger.error(f"qBittorrent POST {endpoint} failed: {e}")
             return False
-
-    def delete_torrent(self, torrent_hash: str, delete_files: bool = True) -> bool:
-        """Delete a torrent and optionally its files."""
-        if not self.enabled:
-            return False
-        logger.info(
-            f"Deleting torrent {torrent_hash[:8]}... "
-            f"(deleteFiles={delete_files})"
-        )
-        return self._post(
-            "/api/v2/torrents/delete",
-            data={
-                "hashes": torrent_hash,
-                "deleteFiles": str(delete_files).lower(),
-            },
-        )
 
     def delete_torrents_by_hashes(
         self, hashes: list[str], delete_files: bool = True
@@ -112,6 +104,9 @@ class QBittorrentClient:
         if not success:
             logger.error("qBittorrent batch delete API call failed.")
 
+        # Wait for qBittorrent to process the deletion asynchronously
+        time.sleep(_VERIFY_DELAY_SECONDS)
+
         # Verify deletion — some torrents may silently survive
         survivors = self.verify_torrents_deleted(hashes)
         if not survivors:
@@ -130,6 +125,8 @@ class QBittorrentClient:
             if not ok:
                 logger.error(f"Individual delete failed for torrent {h[:8]}")
 
+        time.sleep(_VERIFY_DELAY_SECONDS)
+
         # Final verification — check ALL retried hashes, not just API failures,
         # because qBittorrent can return 200 OK without actually deleting
         final_survivors = self.verify_torrents_deleted(survivors)
@@ -144,25 +141,39 @@ class QBittorrentClient:
         return True
 
     def get_all_torrents(self) -> list[dict[str, Any]]:
-        """Fetch all torrents from qBittorrent."""
+        """Fetch all torrents from qBittorrent (cached for 5s)."""
         if not self.enabled:
             return []
+        now = time.monotonic()
+        if self._torrent_cache is not None and (now - self._cache_time) < 5:
+            return self._torrent_cache
         data = self._get("/api/v2/torrents/info")
-        return data if isinstance(data, list) else []
+        result = data if isinstance(data, list) else []
+        self._torrent_cache = result
+        self._cache_time = now
+        return result
 
     def find_torrents_by_content_path(
-        self, path_substring: str
+        self, search_term: str
     ) -> list[dict[str, Any]]:
-        """Find torrents whose content_path or save_path contains the substring."""
-        if not self.enabled or not path_substring:
+        """Find torrents whose content_path contains the search term.
+
+        Uses word-boundary matching to avoid false positives
+        (e.g., "The Great" won't match "The Greatest Showman").
+        Only matches on content_path for precision.
+        """
+        if not self.enabled or not search_term:
             return []
         torrents = self.get_all_torrents()
-        needle = path_substring.lower()
+        # Escape regex special chars and require word boundaries
+        pattern = re.compile(
+            r"(?<![a-zA-Z0-9])" + re.escape(search_term) + r"(?![a-zA-Z0-9])",
+            re.IGNORECASE,
+        )
         return [
             t for t in torrents
-            if needle in (t.get("content_path", "").lower())
-            or needle in (t.get("save_path", "").lower())
-            or needle in (t.get("name", "").lower())
+            if pattern.search(t.get("content_path", ""))
+            or pattern.search(t.get("name", ""))
         ]
 
     def verify_torrents_deleted(self, hashes: list[str]) -> list[str]:
@@ -172,6 +183,8 @@ class QBittorrentClient:
         """
         if not self.enabled or not hashes:
             return []
+        # Force fresh fetch (invalidate cache)
+        self._torrent_cache = None
         torrents = self.get_all_torrents()
         existing = {t["hash"].lower() for t in torrents}
         return [h for h in hashes if h.lower() in existing]

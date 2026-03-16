@@ -69,7 +69,7 @@ def run_once():
             logger.info(f"Running age mode: deleting content older than {MAX_AGE_DAYS} days...")
             age_candidates = analyzer.filter_by_age(sorted_media, MAX_AGE_DAYS)
             if age_candidates:
-                deleted = deleter.delete_list(age_candidates, DRY_RUN)
+                deleted = deleter.delete_list(age_candidates, MEDIA_PATH, DRY_RUN)
                 all_deleted.extend(deleted)
                 # Remove deleted items from sorted list for space mode
                 deleted_set = set(id(m) for m in deleted)
