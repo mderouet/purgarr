@@ -122,7 +122,6 @@ class QBittorrentClient:
             f"{len(survivors)} torrent(s) survived batch delete, "
             "retrying individually..."
         )
-        still_alive = []
         for h in survivors:
             ok = self._post(
                 "/api/v2/torrents/delete",
@@ -130,18 +129,17 @@ class QBittorrentClient:
             )
             if not ok:
                 logger.error(f"Individual delete failed for torrent {h[:8]}")
-                still_alive.append(h)
 
-        # Final verification
-        if still_alive:
-            final_survivors = self.verify_torrents_deleted(still_alive)
-            if final_survivors:
-                short = ", ".join(h[:8] for h in final_survivors)
-                logger.error(
-                    f"{len(final_survivors)} torrent(s) could not be deleted "
-                    f"from qBittorrent: {short}"
-                )
-                return False
+        # Final verification — check ALL retried hashes, not just API failures,
+        # because qBittorrent can return 200 OK without actually deleting
+        final_survivors = self.verify_torrents_deleted(survivors)
+        if final_survivors:
+            short = ", ".join(h[:8] for h in final_survivors)
+            logger.error(
+                f"{len(final_survivors)} torrent(s) could not be deleted "
+                f"from qBittorrent: {short}"
+            )
+            return False
 
         return True
 
