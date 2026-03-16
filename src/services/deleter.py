@@ -217,6 +217,8 @@ class MediaDeleter:
             )
             self._fallback_qbt_search(search_name)
 
+    _FALLBACK_MAX_MATCHES = 3
+
     def _fallback_qbt_search(self, search_name: str) -> None:
         """Search qBittorrent for torrents matching the media name and delete them."""
         matches = self.qbt.find_torrents_by_content_path(search_name)
@@ -226,8 +228,17 @@ class MediaDeleter:
             )
             return
 
-        hashes = [t["hash"] for t in matches]
         names = [t.get("name", "?") for t in matches]
+
+        if len(matches) > self._FALLBACK_MAX_MATCHES:
+            logger.warning(
+                f"  qBittorrent: fallback search for '{search_name}' matched "
+                f"{len(matches)} torrents (likely false positives), skipping: "
+                + ", ".join(names)
+            )
+            return
+
+        hashes = [t["hash"] for t in matches]
         logger.info(
             f"  qBittorrent: found {len(matches)} torrent(s) by name search: "
             + ", ".join(names)

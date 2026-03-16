@@ -156,11 +156,10 @@ class QBittorrentClient:
     def find_torrents_by_content_path(
         self, search_term: str
     ) -> list[dict[str, Any]]:
-        """Find torrents whose content_path contains the search term.
+        """Find torrents whose content_path or name contains the search term.
 
         Uses word-boundary matching to avoid false positives
         (e.g., "The Great" won't match "The Greatest Showman").
-        Only matches on content_path for precision.
         """
         if not self.enabled or not search_term:
             return []
